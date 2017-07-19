@@ -1,382 +1,167 @@
-#[macro_use]
-extern crate serde_derive;
-
-extern crate serde;
-extern crate serde_json;
-
-extern crate futures;
-extern crate tokio_io;
-extern crate tokio_core;
-extern crate tokio_proto;
-extern crate tokio_service;
 extern crate capnp;
-extern crate bytes;
+extern crate capnp_futures;
+extern crate futures;
+extern crate mio_uds;
+extern crate tokio_core;
+use std::collections::HashMap;
+use std::sync::RwLock;
+use std::sync::Arc;
+use std::marker::PhantomData;
 
-use futures::{Future, Stream, Poll};
-use futures::sync::mpsc;
-
-use tokio_io::{AsyncRead, AsyncWrite};
-use tokio_io::codec::{Encoder, Decoder, Framed};
-use tokio_core::reactor::Handle;
-use tokio_proto::{TcpClient, TcpServer};
-use tokio_proto::streaming::{Body, Message};
-use tokio_proto::streaming::pipeline::{Frame, ServerProto, ClientProto};
-use tokio_proto::util::client_proxy::ClientProxy;
-use tokio_service::{Service, NewService};
-
-use bytes::{BytesMut, BufMut};
-
-use std::{io, str};
-use std::net::SocketAddr;
-
-mod cache_capnp;
-
-/// Line-based client handle
-///
-/// This type just wraps the inner service. This is done to encapsulate the
-/// details of how the inner service is structured. Specifically, we don't want
-/// the type signature of our client to be:
-///
-///   ClientTypeMap<ClientProxy<LineMessage, LineMessage, io::Error>>
-///
-/// This also allows adding higher level API functions that are protocol
-/// specific. For example, our line client has a `ping()` function, which sends
-/// a "ping" request.
-pub struct Client {
-    inner: ClientTypeMap<ClientProxy<LineMessage, LineMessage, io::Error>>,
+pub mod cache_capnp {
+    include!(concat!(env!("OUT_DIR"), "/schema/cache_capnp.rs"));
 }
+use cache_capnp::{Type, foo};
+type Cache = Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>;
 
-/// The request and response type for the streaming line-based service.
-///
-/// A message is either "oneshot" and includes the full line, or it is streaming
-/// and the line is broken up into chunks.
-#[derive(Debug)]
-pub enum Line {
-    /// The full line
-    Once(String),
-    /// A stream of line chunks
-    Stream(LineStream),
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cache_capnp::{message, messages, Op, foo, wrapper};
+    fn build_messages(builder: messages::Builder) {
+        let mut messages = builder.init_messages(1);
+        {
+            let mut message = messages.borrow().get(0);
+            message.set_op(Op::Set);
+            message.set_key("foo".as_bytes());
 
-/// A stream of line chunks.
-///
-/// We defined a custom type that wraps `tokio_proto::streaming::Body` in order
-/// to keep tokio-proto as an implementation detail.
-#[derive(Debug)]
-pub struct LineStream {
-    inner: Body<String, io::Error>,
-}
+            {
+                let mut value = message.borrow().init_value();
+                let mut data: foo::Builder = value.init_data().get_as().unwrap();
 
-impl LineStream {
-    /// Returns a `LineStream` with its sender half.
-    pub fn pair() -> (mpsc::Sender<Result<String, io::Error>>, LineStream) {
-        let (tx, rx) = Body::pair();
-        (tx, LineStream { inner: rx })
-    }
-}
-
-impl Stream for LineStream {
-    type Item = String;
-    type Error = io::Error;
-
-    fn poll(&mut self) -> Poll<Option<String>, io::Error> {
-        self.inner.poll()
-    }
-}
-
-/// Message type used to communicate with tokio-proto. The library should hide
-/// this and instead expose a custom message type
-type LineMessage = Message<String, Body<String, io::Error>>;
-
-/// Maps types between Line <-> LineMessage for the server service
-struct ServerTypeMap<T> {
-    inner: T,
-}
-
-/// Maps types between Line <-> LineMessage for the client service
-struct ClientTypeMap<T> {
-    inner: T,
-}
-
-/// Our line-based codec
-///
-/// In this version of the `LineCodec`, some state is required. We need to track
-/// if we are currently decoding a message "head" or the streaming body.
-pub struct LineCodec {
-    decoding_head: bool,
-}
-
-/// Protocol definition
-struct LineProto;
-
-/// Start a server, listening for connections on `addr`.
-///
-/// For each new connection, `new_service` will be used to build a `Service`
-/// instance to process requests received on the new connection.
-///
-/// This function will block as long as the server is running.
-pub fn serve<T>(addr: SocketAddr, new_service: T)
-    where T: NewService<Request = Line, Response = Line, Error = io::Error> + Send + Sync + 'static,
-{
-    let new_service = ServerTypeMap { inner: new_service };
-
-    // Use the tokio-proto TCP server builder, this will handle creating a
-    // reactor instance and other details needed to run a server.
-    TcpServer::new(LineProto, addr)
-        .serve(new_service);
-}
-
-impl Client {
-    /// Establish a connection to a line-based server at the provided `addr`.
-    pub fn connect(addr: &SocketAddr, handle: &Handle) -> Box<Future<Item = Client, Error = io::Error>> {
-        let ret = TcpClient::new(LineProto)
-            .connect(addr, handle)
-            .map(|client_proxy| {
-                // Wrap the returned client handle with our `ClientTypeMap`
-                // service middleware
-                let type_map = ClientTypeMap { inner: client_proxy };
-                Client { inner: type_map }
-            });
-
-        Box::new(ret)
-    }
-}
-
-impl Service for Client {
-    type Request = Line;
-    type Response = Line;
-    type Error = io::Error;
-    // For simplicity, box the future.
-    type Future = Box<Future<Item = Line, Error = io::Error>>;
-
-    fn call(&self, req: Line) -> Self::Future {
-        self.inner.call(req)
-    }
-}
-
-/*
- *
- * ===== impl Line =====
- *
- */
-
-impl From<LineMessage> for Line {
-    fn from(src: LineMessage) -> Line {
-        match src {
-            Message::WithoutBody(line) => Line::Once(line),
-            Message::WithBody(head, body) => {
-                assert_eq!(head, "");
-                Line::Stream(LineStream { inner: body })
+                data.set_name("bar");
             }
+
+        }
+
+        {
+            let mut message = messages.borrow().get(0);
+            message.set_op(Op::Set);
+            message.set_key("foo".as_bytes());
+
+            {
+                let mut value = message.borrow().init_value();
+                let mut data: foo::Builder = value.init_data().get_as().unwrap();
+
+                data.set_name("bar");
+            }
+
         }
     }
-}
 
-impl From<Line> for Message<String, Body<String, io::Error>> {
-    fn from(src: Line) -> Self {
-        match src {
-            Line::Once(line) => Message::WithoutBody(line),
-            Line::Stream(body) => {
-                let LineStream { inner } = body;
-                Message::WithBody("".to_string(), inner)
-            }
+    fn read_value(cache: Cache, key: &[u8]) -> Vec<u8>
+//where T: capnp::traits::SetPointerBuilder<<T as capnp::traits::Owned<'a>>:uBuilder> {
+    {
+        let cache = cache.read().unwrap();
+        let data = cache.get(key).unwrap();
+        let mut buf: Vec<u8> = vec![];
+        let mut reader = capnp::message::Builder::new_default();
+        {
+            let mut message = reader.init_root::<message::Builder<capnp::any_pointer::Owned>>();
+            message.set_key(key);
+            message.set_op(Op::Get);
+
+            let buf = capnp::serialize_packed::read_message(&mut data.clone().as_ref(), capnp::message::ReaderOptions::default()).unwrap();
+            message.set_value(buf.get_root::<wrapper::Reader<_>>().unwrap());
         }
+
+        capnp::serialize_packed::write_message(&mut buf, &reader);
+        buf
     }
-}
 
-/*
- *
- * ===== ServerTypeMap =====
- *
- */
+    fn set_value(cache: Cache, key: &[u8], value: wrapper::Reader<capnp::any_pointer::Owned>)
+//where T: capnp::traits::SetPointerBuilder<<T as capnp::traits::Owned<'a>>::Builder> {
+    {
+        let mut cache = cache.write().unwrap();
+        use std::io::BufRead;
+        let mut buf: Vec<u8> = vec![];
+        let mut data = value.get_data().unwrap();
 
-impl<T> Service for ServerTypeMap<T>
-    where T: Service<Request = Line, Response = Line, Error = io::Error>,
-          T::Future: 'static
-{
-    type Request = LineMessage;
-    type Response = LineMessage;
-    type Error = io::Error;
-    type Future = Box<Future<Item = LineMessage, Error = io::Error>>;
+        let mut builder = capnp::message::Builder::new_default();
+        {
+            let mut message = builder.init_root::<wrapper::Builder<capnp::any_pointer::Owned>>();
+            message.set_data(data);
+        }
 
-    fn call(&self, req: LineMessage) -> Self::Future {
-        Box::new(self.inner.call(req.into())
-            .map(LineMessage::from))
+        capnp::serialize_packed::write_message(&mut buf, &builder);
+        cache.insert(Vec::from(key), buf);
     }
-}
 
-impl<T> NewService for ServerTypeMap<T>
-    where T: NewService<Request = Line, Response = Line, Error = io::Error>,
-          <T::Instance as Service>::Future: 'static
-{
-    type Request = LineMessage;
-    type Response = LineMessage;
-    type Error = io::Error;
-    type Instance = ServerTypeMap<T::Instance>;
-
-    fn new_service(&self) -> io::Result<Self::Instance> {
-        let inner = try!(self.inner.new_service());
-        Ok(ServerTypeMap { inner: inner })
-    }
-}
-
-/*
- *
- * ===== ClientTypeMap =====
- *
- */
-
-impl<T> Service for ClientTypeMap<T>
-    where T: Service<Request = LineMessage, Response = LineMessage, Error = io::Error>,
-          T::Future: 'static
-{
-    type Request = Line;
-    type Response = Line;
-    type Error = io::Error;
-    type Future = Box<Future<Item = Line, Error = io::Error>>;
-
-    fn call(&self, req: Line) -> Self::Future {
-        Box::new(self.inner.call(req.into())
-            .map(Line::from))
-    }
-}
-
-/// Implementation of the simple line-based protocol.
-///
-/// Frames consist of a UTF-8 encoded string, terminated by a '\n' character.
-impl Decoder for LineCodec {
-    type Item = Frame<String, String, io::Error>;
-    type Error = io::Error;
-
-
-    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
-        // Check to see if the frame contains a new line
-        if let Some(n) = buf.as_ref().iter().position(|b| *b == b'\n') {
-            // remove the serialized frame from the buffer.
-            let line = buf.split_to(n);
-
-            // Also remove the '\n'
-            buf.split_to(1);
-
-            // Turn this data into a UTF string and return it in a Frame.
-            return match str::from_utf8(&line.as_ref()) {
-                Ok(s) => {
-                    // Got an empty line, which means that the state should be
-                    // toggled.
-                    if s == "" {
-                        let decoding_head = self.decoding_head;
-                        // Toggle the state
-                        self.decoding_head = !decoding_head;
-
-                        if decoding_head {
-                            Ok(Some(Frame::Message {
-                                // The message head is an empty line
-                                message: s.to_string(),
-                                // We will be streaming a body after this
-                                body: true,
-                            }))
-                        } else {
-                            // We parsed the streaming body "termination" frame,
-                            // which is represented as `None`.
-                            Ok(Some(Frame::Body {
-                                chunk: None
-                            }))
-                        }
-                    } else {
-                        if self.decoding_head {
-                            // This is a "oneshot" message with no streaming
-                            // body
-                            Ok(Some(Frame::Message {
-                                message: s.to_string(),
-                                body: false,
-                            }))
-                        } else {
-                            // This line is a chunk in a streaming body
-                            Ok(Some(Frame::Body {
-                                chunk: Some(s.to_string()),
-                            }))
-                        }
+    fn read_message(cache: Cache, reader: message::Reader<capnp::any_pointer::Owned>) -> Vec<u8>
+// where T: capnp::traits::SetPointerBuilder<<T as capnp::traits::Owned<'a>>::Builder> {
+    {
+        let reader = reader.clone();
+        match reader.get_op() {
+            Ok(op) => {
+                match op {
+                    Op::Get => read_value(cache, reader.get_key().expect("get key")),
+                    Op::Set => {
+                        println!("SET!");
+                        use std::borrow::Borrow;
+                        let value = reader.clone().get_value().unwrap();
+                        set_value(cache, reader.get_key().unwrap(), value);
+                        vec![]
+                    }
+                    Op::Del => {
+                        println!("DEL!");
+                        vec![]
                     }
                 }
-                Err(_) => Err(io::Error::new(io::ErrorKind::Other, "invalid string")),
+            }
+            Err(e) => {
+                println!("Error! {}", e);
+                vec![]
             }
         }
-
-        Ok(None)
     }
-}
 
-impl Encoder for LineCodec {
-    type Item = Frame<String, String, io::Error>;
-    type Error = io::Error;
+    #[test]
+    fn foo() {
+        use tokio_core::reactor;
+        use mio_uds::UnixStream;
+        use capnp;
+        use capnp_futures;
+        use futures::future::Future;
+        use futures::stream::Stream;
 
+        use std::cell::Cell;
+        use std::rc::Rc;
 
-    fn encode(&mut self, msg: Self::Item, buf: &mut BytesMut) -> io::Result<()> {
-        match msg {
-            Frame::Message { message, body } => {
-                // Our protocol dictates that a message head that includes a
-                // streaming body is an empty string.
-                assert!(message.is_empty() == body);
+        let mut l = reactor::Core::new().unwrap();
+        let handle = l.handle();
+        let (s1, s2) = UnixStream::pair().unwrap();
 
-                buf.reserve(message.len());
-                buf.extend(message.as_bytes());
-            }
-            Frame::Body { chunk } => {
-                if let Some(chunk) = chunk {
-                    buf.reserve(chunk.len());
-                    buf.extend(chunk.as_bytes());
+        let s1 = reactor::PollEvented::new(s1, &handle).unwrap();
+        let s2 = reactor::PollEvented::new(s2, &handle).unwrap();
+
+        let cache: Cache = Arc::new(RwLock::new(HashMap::new()));
+        {
+            let (mut sender, write_queue) = capnp_futures::write_queue(s1);
+
+            let read_stream = capnp_futures::ReadStream::new(s2, Default::default());
+
+            let done_reading = read_stream.for_each(|m2| {
+                let messages = m2.get_root::<messages::Reader>().unwrap();
+                {
+                    for message in messages.get_messages().unwrap().iter() {
+                        read_message(cache.clone(), message.clone());
+                    }
                 }
-            }
-            Frame::Error { error } => {
-                // Our protocol does not support error frames, so this results
-                // in a connection level error, which will terminate the socket.
-                return Err(error);
-            }
+                Ok(())
+            });
+
+            let io = done_reading.join(write_queue.map(|_| ()));
+
+            let mut m = capnp::message::Builder::new_default();
+            build_messages(m.init_root());
+            handle.spawn(sender.send(m).map_err(|_| panic!("cancelled")).map(|_| {
+                println!("SENT");
+                ()
+            }));
+            drop(sender);
+            l.run(io).expect("running");
         }
-
-        // Push the new line
-        buf.put_u8(b'\n');
-
-        Ok(())
-    }
-}
-
-impl<T: AsyncRead + AsyncWrite + 'static> ClientProto<T> for LineProto {
-    type Request = String;
-    type RequestBody = String;
-    type Response = String;
-    type ResponseBody = String;
-    type Error = io::Error;
-
-    /// `Framed<T, LineCodec>` is the return value of `io.framed(LineCodec)`
-    type Transport = Framed<T, LineCodec>;
-    type BindTransport = Result<Self::Transport, io::Error>;
-
-    fn bind_transport(&self, io: T) -> Self::BindTransport {
-        let codec = LineCodec {
-            decoding_head: true,
-        };
-
-        Ok(io.framed(codec))
-    }
-}
-
-impl<T: AsyncRead + AsyncWrite + 'static> ServerProto<T> for LineProto {
-    type Request = String;
-    type RequestBody = String;
-    type Response = String;
-    type ResponseBody = String;
-    type Error = io::Error;
-
-    /// `Framed<T, LineCodec>` is the return value of `io.framed(LineCodec)`
-    type Transport = Framed<T, LineCodec>;
-    type BindTransport = Result<Self::Transport, io::Error>;
-
-    fn bind_transport(&self, io: T) -> Self::BindTransport {
-        let codec = LineCodec {
-            decoding_head: true,
-        };
-
-        Ok(io.framed(codec))
+        println!("{:?}", cache);
+        assert!(false)
     }
 }
