@@ -13,14 +13,14 @@ enum Op {
 struct Message(Value) {
     op @0 :Op;
     key @1 :Data;
-    value @2 :Wrapper(Value);
+    value @2 :Envelope(Value);
 }
 
 struct Messages {
     messages @0 :List(Message);
 }
 
-struct Wrapper(Value){
+struct Envelope(Value){
     type @0 :Type;
     data @1 :Value;
 }
