@@ -11,103 +11,109 @@ use std::marker::PhantomData;
 pub mod cache_capnp {
     include!(concat!(env!("OUT_DIR"), "/schema/cache_capnp.rs"));
 }
-use cache_capnp::{Type, foo, message as msg, envelope};
-type Cache = Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>;
+use cache_capnp::{Type, foo, message as msg, envelope, Op, messages as msgs};
 
+type Cache = Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>;
+fn build_messages(builder: msgs::Builder) {
+    let mut messages = builder.init_messages(2);
+    {
+        let mut message = messages.borrow().get(0);
+        message.set_op(Op::Set);
+        message.set_key("foo".as_bytes());
+
+        {
+            let mut value = message.borrow().init_value();
+            let mut data: foo::Builder = value.init_data().get_as().unwrap();
+
+            data.set_name("bar");
+        }
+
+    }
+
+    {
+        let mut message = messages.borrow().get(1);
+        message.set_op(Op::Get);
+        message.set_key("foo".as_bytes());
+    }
+}
+
+fn print_message(buf: &mut &[u8]) {
+    let reader =
+        capnp::serialize_packed::read_message(buf, capnp::message::ReaderOptions::default())
+            .unwrap();
+    let message = reader.get_root::<msg::Reader<foo::Owned>>().unwrap();
+    let op = message.get_op().unwrap();
+    let key = message.get_key().unwrap();
+    let value = message.get_value().unwrap();
+    let data = value.get_data().unwrap();
+    let foo = data.get_name().unwrap();
+    println!("OP: {:?} KEY: {:?} Foo: {}", op as u16, key, foo);
+}
+
+fn read_value(cache: Cache, key: &[u8]) -> Vec<u8> {
+    let cache = cache.read().unwrap();
+    cache.get(key).unwrap().to_owned()
+}
+
+fn set_value(cache: Cache, key: &[u8], value: envelope::Reader<capnp::any_pointer::Owned>) {
+    let mut cache = cache.write().unwrap();
+    use std::io::BufRead;
+    let mut buf: Vec<u8> = vec![];
+    let mut data = value.get_data().unwrap();
+
+    let mut builder = capnp::message::Builder::new_default();
+    {
+        let mut message = builder.init_root::<envelope::Builder<capnp::any_pointer::Owned>>();
+        message.set_data(data);
+    }
+
+    capnp::serialize_packed::write_message(&mut buf, &builder);
+    cache.insert(Vec::from(key), buf);
+}
+
+static success: &'static str = "success";
+
+fn read_message(cache: Cache, reader: msg::Reader<capnp::any_pointer::Owned>) -> Vec<u8> {
+    match reader.get_op() {
+        Ok(op) => {
+            match op {
+                Op::Get => {
+                    println!("get!");
+                    read_value(cache, reader.get_key().expect("get key"))
+                }
+                Op::Set => {
+                    println!("SET!");
+                    use std::borrow::Borrow;
+                    let value = reader.clone().get_value().unwrap();
+                    let key = reader.get_key().unwrap();
+                    set_value(cache, key, value);
+                    vec![]
+                }
+                Op::Del => vec![],
+            }
+        }
+        Err(e) => {
+            println!("Error: {}", e);
+            vec![]
+        }
+    }
+}
+
+fn wrap_result(data: Vec<u8>, mut builder: msg::Builder<capnp::any_pointer::Owned>) {
+    use std::io::BufRead;
+    let msg = capnp::serialize_packed::read_message(
+        &mut data.as_ref(),
+        capnp::message::ReaderOptions::default(),
+    );
+    builder.set_value(msg.unwrap().get_root().unwrap());
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cache_capnp::{message, messages, Op, foo, envelope};
-    fn build_messages(builder: messages::Builder) {
-        let mut messages = builder.init_messages(2);
-        {
-            let mut message = messages.borrow().get(0);
-            message.set_op(Op::Set);
-            message.set_key("foo".as_bytes());
 
-            {
-                let mut value = message.borrow().init_value();
-                let mut data: foo::Builder = value.init_data().get_as().unwrap();
-
-                data.set_name("bar");
-            }
-
-        }
-
-        {
-            let mut message = messages.borrow().get(1);
-            message.set_op(Op::Get);
-            message.set_key("foo".as_bytes());
-        }
-    }
-
-    fn print_message(buf: &mut &[u8]) {
-        let reader = capnp::serialize_packed::read_message(buf, capnp::message::ReaderOptions::default()).unwrap();
-        let message = reader.get_root::<message::Reader<foo::Owned>>().unwrap();
-        let op = message.get_op().unwrap();
-        let key = message.get_key().unwrap();
-        let value = message.get_value().unwrap();
-        let data = value.get_data().unwrap();
-        let foo = data.get_name().unwrap();
-        println!("OP: {:?} KEY: {:?} Foo: {}", op as u16, key, foo);
-    }
-
-    fn read_value(cache: Cache, key: &[u8]) -> Vec<u8>
-    {
-        let cache = cache.read().unwrap();
-        cache.get(key).unwrap().to_owned()
-    }
-
-    fn set_value(cache: Cache, key: &[u8], value: envelope::Reader<capnp::any_pointer::Owned>)
-    {
-        let mut cache = cache.write().unwrap();
-        use std::io::BufRead;
-        let mut buf: Vec<u8> = vec![];
-        let mut data = value.get_data().unwrap();
-
-        let mut builder = capnp::message::Builder::new_default();
-        {
-            let mut message = builder.init_root::<envelope::Builder<capnp::any_pointer::Owned>>();
-            message.set_data(data);
-        }
-
-        capnp::serialize_packed::write_message(&mut buf, &builder);
-        cache.insert(Vec::from(key), buf);
-    }
-
-    static success: &'static str = "success";
-
-    fn read_message(cache: Cache, reader: message::Reader<capnp::any_pointer::Owned>) -> Vec<u8>
-    {
-        let reader = reader.clone();
-        match reader.get_op() {
-            Ok(op) => {
-                match op {
-                    Op::Get => {
-                        println!("get!");
-                        read_value(cache, reader.get_key().expect("get key"))
-                    },
-                    Op::Set => {
-                        println!("SET!");
-                        use std::borrow::Borrow;
-                        let value = reader.clone().get_value().unwrap();
-                        let key = reader.get_key().unwrap();
-                        set_value(cache, key, value);
-                        vec![]
-                    },
-                    Op::Del => {
-                        vec![]
-                    }
-                }
-            }
-            Err(e) => {
-                println!("Error: {}", e);
-                vec![]
-            }
-        }
-    }
-
+    #[test]
+    fn bar() {}
     #[test]
     fn foo() {
         use tokio_core::reactor;
@@ -134,10 +140,12 @@ mod tests {
             let read_stream = capnp_futures::ReadStream::new(s2, Default::default());
 
             let done_reading = read_stream.for_each(|m2| {
-                let messages = m2.get_root::<messages::Reader>().unwrap();
+                let messages = m2.get_root::<msgs::Reader>().unwrap();
                 {
                     for message in messages.get_messages().unwrap().iter() {
-                        read_message(cache.clone(), message);
+                        let result = read_message(cache.clone(), message);
+                        let mut resp = capnp::message::Builder::new_default();
+                        wrap_result(result, resp.init_root());
                     }
                 }
                 Ok(())
