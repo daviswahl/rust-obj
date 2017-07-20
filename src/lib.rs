@@ -13,8 +13,10 @@ pub mod cache_capnp {
 }
 use cache_capnp::{Type, foo, message as msg, envelope, Op, messages as msgs};
 
-type Cache = Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>;
-fn build_messages(builder: msgs::Builder) {
+pub use cache_capnp::message;
+
+pub type Cache = Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>;
+pub fn build_messages(builder: msgs::Builder) {
     let mut messages = builder.init_messages(2);
     {
         let mut message = messages.borrow().get(0);
@@ -37,7 +39,7 @@ fn build_messages(builder: msgs::Builder) {
     }
 }
 
-fn print_message(buf: &mut &[u8]) {
+pub fn print_message(buf: &mut &[u8]) {
     let reader =
         capnp::serialize_packed::read_message(buf, capnp::message::ReaderOptions::default())
             .unwrap();
@@ -50,12 +52,12 @@ fn print_message(buf: &mut &[u8]) {
     println!("OP: {:?} KEY: {:?} Foo: {}", op as u16, key, foo);
 }
 
-fn read_value(cache: Cache, key: &[u8]) -> Vec<u8> {
+pub fn read_value(cache: Cache, key: &[u8]) -> Vec<u8> {
     let cache = cache.read().unwrap();
     cache.get(key).unwrap().to_owned()
 }
 
-fn set_value(cache: Cache, key: &[u8], value: envelope::Reader<capnp::any_pointer::Owned>) {
+pub fn set_value(cache: Cache, key: &[u8], value: envelope::Reader<capnp::any_pointer::Owned>) {
     let mut cache = cache.write().unwrap();
     use std::io::BufRead;
     let mut buf: Vec<u8> = vec![];
@@ -71,8 +73,6 @@ fn set_value(cache: Cache, key: &[u8], value: envelope::Reader<capnp::any_pointe
     cache.insert(Vec::from(key), buf);
 }
 
-static success: &'static str = "success";
-
 fn read_message(cache: Cache, reader: msg::Reader<capnp::any_pointer::Owned>) -> Vec<u8> {
     match reader.get_op() {
         Ok(op) => {
@@ -84,7 +84,7 @@ fn read_message(cache: Cache, reader: msg::Reader<capnp::any_pointer::Owned>) ->
                 Op::Set => {
                     println!("SET!");
                     use std::borrow::Borrow;
-                    let value = reader.clone().get_value().unwrap();
+                    let value = reader.get_value().unwrap();
                     let key = reader.get_key().unwrap();
                     set_value(cache, key, value);
                     vec![]

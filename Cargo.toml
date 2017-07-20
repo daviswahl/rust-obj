@@ -5,6 +5,13 @@ authors = ["Davis Wahl <dwahl@signalpath.com>"]
 
 build = "build.rs"
 
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "objcache"
+path = "src/main.rs"
+
 [dependencies]
 bytes = "0.4"
 futures = "0.1"
