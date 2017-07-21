@@ -8,7 +8,8 @@ extern crate tokio_core;
 use std::collections::HashMap;
 use std::sync::RwLock;
 use std::sync::Arc;
-use std::marker::PhantomData;
+
+pub mod error;
 
 pub mod cache_capnp {
     include!(concat!(env!("OUT_DIR"), "/schema/cache_capnp.rs"));

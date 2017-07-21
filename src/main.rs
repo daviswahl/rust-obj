@@ -11,7 +11,7 @@ extern crate capnp_futures;
 extern crate bytes;
 
 use futures::{Future, Stream};
-use tokio_io::{io, AsyncRead, AsyncWrite};
+use tokio_io::{AsyncWrite, AsyncRead};
 use tokio_io::codec::{Decoder, Encoder};
 use tokio_proto::streaming::pipeline::ServerProto;
 use tokio_core::net::{TcpListener, TcpStream};
@@ -20,6 +20,7 @@ use bytes::BytesMut;
 use std::env;
 use capnp_futures::serialize::*;
 use futures::Sink;
+use objcache::error;
 
 
 fn main() {
@@ -40,13 +41,12 @@ fn client() {
     let addr = "127.0.0.1:12345".parse().unwrap();
 
     let socket = TcpStream::connect(&addr, &handle);
-    let transport = socket.and_then(|socket| {
-        let transport = capnp_futures::serialize::Transport::new(socket, Default::default());
-        futures::future::ok(transport)
-    });
 
-    let request = transport.and_then(|socket| {
-        let (mut writer, reader) = socket.split();
+    let request = socket.and_then(|socket| {
+        let (r, w) = socket.split();
+        let (mut sender, write_queue) = capnp_futures::write_queue(w);
+        let read_stream = capnp_futures::ReadStream::new(r, Default::default());
+
         let mut m = capnp::message::Builder::new_default();
 
         let mut m_data = capnp::message::Builder::new_default();
@@ -67,16 +67,9 @@ fn client() {
             "foo",
             vec![],
         );
-        writer.start_send(m);
-        writer
-            .send(m2)
-            .and_then(|_| {
-                reader
-                    .map(|m| objcache::print_message(m))
-                    .into_future()
-                    .map_err(|_| capnp::Error::failed(format!("foo")))
-            })
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+        use std::io;
+        sender.send(m).and_then(move|_| sender.send(m2)).map_err(|e| error::decoding("fuck").into())
+
     });
 
     core.run(request).unwrap();
@@ -91,6 +84,7 @@ fn server() {
     let addr = "127.0.0.1:12345".parse().unwrap();
     let tcp = TcpListener::bind(&addr, &handle).unwrap();
     let mut cache = objcache::new_cache();
+
 
     // Iterate incoming connections
     let server = tcp.incoming().for_each(move |(tcp, _)| {

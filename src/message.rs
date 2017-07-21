@@ -1,7 +1,11 @@
 extern crate capnp;
 
 use cache_capnp;
+use error;
 use std::marker::PhantomData;
+
+type AnyProto = capnp::any_pointer::Owned;
+type AnyBuilder = capnp::message::Builder<capnp::message::HeapAllocator>;
 
 
 pub trait HasTypeId {
@@ -9,50 +13,54 @@ pub trait HasTypeId {
 }
 
 pub trait IntoProto {
-    fn into_proto(self) -> capnp::message::Builder<capnp::message::HeapAllocator>;
+    fn into_proto(self) -> Result<AnyBuilder, error::Error>;
 }
 
 pub trait FromProto<'a> {
-    type From;
-    fn from_proto(m: Self::From) -> Result<Box<Self>, capnp::Error>;
+    type Reader;
+    fn from_proto(m: Self::Reader) -> Result<Box<Self>, error::Error>;
 }
 
-/// Message
+/// Request
 #[derive(Debug, Clone)]
-pub struct Message<'a, T: 'a + IntoProto + FromProto<'a> + HasTypeId> {
-    key: String,
+pub struct Request<'a, T: 'a + IntoProto + FromProto<'a> + HasTypeId> {
+    key: Vec<u8>,
     op: Op,
-    envelope: Envelope<'a, T>,
+    envelope: Option<Envelope<'a, T>>,
     _p: PhantomData<&'a T>
 }
 
-impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> IntoProto for Message<'a, T> {
-    fn into_proto(self) -> capnp::message::Builder<capnp::message::HeapAllocator> {
+impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> IntoProto for Request<'a, T> {
+    fn into_proto(self) -> Result<AnyBuilder, error::Error> {
         let mut builder = capnp::message::Builder::new_default();
         {
             let mut message =
-                builder.init_root::<cache_capnp::message::Builder<capnp::any_pointer::Owned>>();
+                builder.init_root::<cache_capnp::message::Builder<AnyProto>>();
             message.set_op(self.op.into());
-            message.set_key(self.key.as_bytes());
+            message.set_key(self.key.as_ref());
 
-            message.set_value(
-                self.envelope
-                    .into_proto()
-                    .get_root::<cache_capnp::envelope::Builder<capnp::any_pointer::Owned>>()
-                    .unwrap()
-                    .as_reader(),
-            );
+            self.envelope.map(|envelope| message.set_value(
+                envelope
+                    .into_proto().unwrap()
+                    .get_root::<cache_capnp::envelope::Builder<AnyProto>>()?
+                    .as_reader()
+            ));
         }
-        builder
+        Ok(builder)
     }
 }
 
-impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> FromProto<'a> for Message<'a, T> {
-    type From = cache_capnp::message::Reader<'a, capnp::any_pointer::Owned>;
+impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> FromProto<'a> for Request<'a, T> {
+    type Reader = cache_capnp::message::Reader<'a, AnyProto>;
 
-    fn from_proto(m: Self::From) -> Result<Box<Self>, capnp::Error> {
-        let env = m.get_value()?;
-        Ok(Box::new(Self{op: Op::Set, key: "foo".into(), envelope: *Envelope::from_proto(env)?, _p: PhantomData}))
+    fn from_proto(m: Self::Reader) -> Result<Box<Self>, error::Error> {
+        let env = if m.has_value() {
+            Some(*Envelope::from_proto(m.get_value()?)?)
+        } else {
+            None
+        };
+
+        Ok(Box::new(Self{op: Op::Set, key: m.get_key()?.into(), envelope: env, _p: PhantomData}))
     }
 }
 
@@ -115,26 +123,27 @@ pub struct Envelope<'a, T: 'a + IntoProto + FromProto<'a> + HasTypeId> {
 }
 
 impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> IntoProto for Envelope<'a, T> {
-    fn into_proto(self) -> capnp::message::Builder<capnp::message::HeapAllocator> {
+    fn into_proto(self) -> Result<AnyBuilder, error::Error> {
         let mut builder = capnp::message::Builder::new_default();
         {
             let mut message =
-                builder.init_root::<cache_capnp::envelope::Builder<capnp::any_pointer::Owned>>();
+                builder.init_root::<cache_capnp::envelope::Builder<AnyProto>>();
             message.set_type(self.type_id.into());
         }
-        builder
+        Ok(builder)
     }
 }
 
 impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> FromProto<'a> for Envelope<'a, T> {
-    type From = cache_capnp::envelope::Reader<'a, capnp::any_pointer::Owned>;
+    type Reader = cache_capnp::envelope::Reader<'a, AnyProto>;
 
-    fn from_proto(message: Self::From) -> Result<Box<Self>, capnp::Error> {
-        let tpe = message.get_type().unwrap();
-        let value = message.get_data().unwrap();
-        Err(capnp::Error{kind: capnp::ErrorKind::Failed, description: "Fuck".into()})
+    fn from_proto(message: Self::Reader) -> Result<Box<Self>, error::Error> {
+        let tpe = message.get_type()?;
+        let value = message.get_data()?;
+        Err(error::decoding("error decoding"))
     }
 }
+
 /// Foo
 #[derive(Debug, Clone)]
 pub struct Foo {
@@ -142,20 +151,20 @@ pub struct Foo {
 }
 
 impl IntoProto for Foo {
-    fn into_proto(self) -> capnp::message::Builder<capnp::message::HeapAllocator> {
+    fn into_proto(self) -> Result<AnyBuilder, error::Error> {
         let mut builder = capnp::message::Builder::new_default();
         {
             let mut message = builder.init_root::<cache_capnp::foo::Builder>();
             message.set_name(self.name.as_str())
         }
-        builder
+        Ok(builder)
     }
 }
 
 impl <'a>FromProto<'a> for Foo {
-    type From = cache_capnp::foo::Reader<'a>;
+    type Reader = cache_capnp::foo::Reader<'a>;
 
-    fn from_proto(m: Self::From) -> Result<Box<Self>, capnp::Error> {
+    fn from_proto(m: Self::Reader) -> Result<Box<Self>, error::Error> {
         let name = m.get_name()?;
         Ok(Box::new(Self { name: name.into() }))
     }
@@ -169,12 +178,9 @@ impl HasTypeId for Foo {
 
 impl Foo {
     fn new(name: String) -> Self {
-        Self { name }
+        Self { name: name }
     }
 }
-
-
-
 
 #[cfg(test)]
 mod tests {
@@ -188,10 +194,10 @@ mod tests {
             data: foo,
             _p: PhantomData
         };
-        let msg = Message {
+        let msg = Request {
             op: Op::Set,
             key: "bar".into(),
-            envelope: env,
+            envelope: Some(env),
             _p: PhantomData,
         };
         msg.into_proto();
