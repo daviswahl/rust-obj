@@ -19,6 +19,7 @@ use tokio_core::reactor::Core;
 use bytes::BytesMut;
 use std::env;
 use capnp_futures::serialize::*;
+use futures::Sink;
 
 
 fn main() {
@@ -32,22 +33,6 @@ fn main() {
 }
 
 struct CapnProto;
-
-//impl<T: AsyncRead + AsyncWrite + 'static> ServerProto<T> for CapnProto {
-//    type Request = capnp_futures::serialize::OwnedSegments;
-//    type RequestBody = capnp_futures::serialize::OwnedSegments;
-//    type Response = capnp_futures::serialize::OwnedSegments;
-//    type ResponseBody = capnp_futures::serialize::OwnedSegments;
-//    type Error = std::io::Error;
-//
-//    type Transport = capnp_futures::serialize::Transport<T, >;
-//    type BindTransport = Result<Self::Transport, Self::Error>;
-//
-//    fn bind_transport(&self, io: T) -> Self::BindTransport {
-//        Ok(capnp_futures::serialize::Transport::new(io, capnp::message::ReaderOptions::default()))
-//    }
-//
-//}
 
 fn client() {
     let mut core = Core::new().unwrap();
@@ -63,8 +48,8 @@ fn client() {
     let request = transport.and_then(|socket| {
         let (writer, reader) = socket.split();
         let mut m = capnp::message::Builder::new_default();
-        objcache::build_messages(m.init_root());
-        use futures::Sink;
+        objcache::build_messages(m.init_root(), objcache::Op::Get, "foo", vec![]);
+
 
         writer
             .send(m)
@@ -103,7 +88,7 @@ fn server() {
             let resp = objcache::read_message(c2.clone(), message);
             let mut m = capnp::message::Builder::new_default();
 
-            objcache::build_messages(m.init_root());
+            objcache::build_messages(m.init_root(), objcache::Op::Set, "foo", resp);
 
             Ok(m)
         });
@@ -125,15 +110,6 @@ mod tests {
     use test::Bencher;
     #[bench]
     fn bench1(b: &mut Bencher) {
-        b.iter(|| {
-            let mut threads = vec![];
-            for i in 0..20 {
-                threads.push(std::thread::spawn(move || client()));
-            }
-
-            for thread in threads {
-                thread.join();
-            }
-        })
+        b.iter(||  client())
     }
 }
