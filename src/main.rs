@@ -46,13 +46,25 @@ fn client() {
     });
 
     let request = transport.and_then(|socket| {
-        let (writer, reader) = socket.split();
+        let (mut writer, reader) = socket.split();
         let mut m = capnp::message::Builder::new_default();
-        objcache::build_messages(m.init_root(), objcache::Op::Get, "foo", vec![]);
 
+        let mut m_data = capnp::message::Builder::new_default();
+        {
+            let mut foo = m_data.init_root::<objcache::cache_capnp::foo::Builder>();
+            foo.set_name("bar");
+        }
 
+        let mut buf = vec![];
+        capnp::serialize_packed::write_message(&mut buf, &m_data);
+
+        objcache::build_messages(m.init_root(), objcache::cache_capnp::Op::Set, "foo", buf);
+
+        let mut m2 = capnp::message::Builder::new_default();
+        objcache::build_messages(m2.init_root(), objcache::cache_capnp::Op::Get, "foo", vec![]);
+        writer.start_send(m);
         writer
-            .send(m)
+            .send(m2)
             .and_then(|_| {
                 reader
                     .map(|m| objcache::print_message(m))
@@ -88,7 +100,7 @@ fn server() {
             let resp = objcache::read_message(c2.clone(), message);
             let mut m = capnp::message::Builder::new_default();
 
-            objcache::build_messages(m.init_root(), objcache::Op::Set, "foo", resp);
+            objcache::build_messages(m.init_root(), objcache::cache_capnp::Op::Set, "foo", resp);
 
             Ok(m)
         });
@@ -110,6 +122,6 @@ mod tests {
     use test::Bencher;
     #[bench]
     fn bench1(b: &mut Bencher) {
-        b.iter(||  client())
+        b.iter(|| client())
     }
 }
