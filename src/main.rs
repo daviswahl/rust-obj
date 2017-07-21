@@ -56,12 +56,17 @@ fn client() {
         }
 
         let mut buf = vec![];
-        capnp::serialize_packed::write_message(&mut buf, &m_data);
+        capnp::serialize_packed::write_message(&mut buf, &m_data).unwrap();
 
         objcache::build_messages(m.init_root(), objcache::cache_capnp::Op::Set, "foo", buf);
 
         let mut m2 = capnp::message::Builder::new_default();
-        objcache::build_messages(m2.init_root(), objcache::cache_capnp::Op::Get, "foo", vec![]);
+        objcache::build_messages(
+            m2.init_root(),
+            objcache::cache_capnp::Op::Get,
+            "foo",
+            vec![],
+        );
         writer.start_send(m);
         writer
             .send(m2)
