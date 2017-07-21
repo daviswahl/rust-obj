@@ -7,7 +7,6 @@ use std::marker::PhantomData;
 type AnyProto = capnp::any_pointer::Owned;
 type AnyBuilder = capnp::message::Builder<capnp::message::HeapAllocator>;
 
-
 pub trait HasTypeId {
     fn type_id(&self) -> Type;
 }
@@ -59,8 +58,9 @@ impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> FromProto<'a> for Request<'a,
         } else {
             None
         };
-
-        Ok(Box::new(Self{op: Op::Set, key: m.get_key()?.into(), envelope: env, _p: PhantomData}))
+        let key = m.get_key()?;
+        println!("{:?}", key);
+        Ok(Box::new(Self{op: Op::Set, key: key.into(), envelope: env, _p: PhantomData}))
     }
 }
 
@@ -186,6 +186,19 @@ impl Foo {
 mod tests {
     use super::*;
 
+    fn build_message(mut m: cache_capnp::message::Builder<cache_capnp::foo::Owned>) {
+        m.set_op(cache_capnp::Op::Set);
+        m.set_key("foo".as_bytes());
+        {
+            let mut value = m.init_value();
+            value.set_type(cache_capnp::Type::Foo);
+            {
+                let mut data = value.init_data();
+                data.set_name("bar")
+            }
+        }
+    }
+
     #[test]
     fn test_foo() {
         let foo = Foo::new("bar".into());
@@ -201,5 +214,12 @@ mod tests {
             _p: PhantomData,
         };
         msg.into_proto();
+
+        let mut builder = capnp::message::Builder::new_default();
+        build_message(builder.init_root());
+
+        let mut root = builder.get_root::<cache_capnp::message::Builder<AnyProto>>().unwrap();
+        let msg: Request<Foo> = *Request::from_proto(root.as_reader()).unwrap();
+        assert_eq!(msg.key, "foo".as_bytes())
     }
 }

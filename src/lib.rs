@@ -5,12 +5,15 @@ extern crate capnp_futures;
 extern crate futures;
 extern crate mio_uds;
 extern crate tokio_core;
+extern crate tokio_io;
 use std::collections::HashMap;
 use std::sync::RwLock;
 use std::sync::Arc;
 
 pub mod error;
 
+pub mod client;
+pub mod server;
 pub mod cache_capnp {
     include!(concat!(env!("OUT_DIR"), "/schema/cache_capnp.rs"));
 }
