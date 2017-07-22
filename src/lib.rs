@@ -28,7 +28,7 @@ pub fn new_cache() -> Cache {
 
 
 pub fn build_messages(
-    mut message: cache_capnp::message::Builder<capnp::any_pointer::Owned>,
+    mut message: cache_capnp::request::Builder<capnp::any_pointer::Owned>,
     op: cache_capnp::Op,
     key: &str,
     data: Vec<u8>,
@@ -40,13 +40,13 @@ pub fn build_messages(
 
 pub fn print_message(reader: capnp::message::Reader<capnp_futures::serialize::OwnedSegments>) {
     let message = reader
-        .get_root::<cache_capnp::message::Reader<capnp::any_pointer::Owned>>()
+        .get_root::<cache_capnp::request::Reader<capnp::any_pointer::Owned>>()
         .unwrap();
     let op = message.get_op().unwrap();
     let key = message.get_key().unwrap();
-    let value = message.get_value().unwrap();
+    let value = message.get_payload().unwrap();
     let data = value.get_data().unwrap();
-    let env = data.get_as::<cache_capnp::envelope::Reader<capnp::any_pointer::Owned>>()
+    let env = data.get_as::<cache_capnp::payload::Reader<capnp::any_pointer::Owned>>()
         .unwrap();
     let tpe = env.get_type().unwrap();
     let data = env.get_data().unwrap();
@@ -67,7 +67,7 @@ pub fn read_value(cache: Cache, key: &[u8]) -> Option<Vec<u8>> {
 pub fn set_value(
     cache: Cache,
     key: &[u8],
-    value: cache_capnp::envelope::Reader<capnp::any_pointer::Owned>,
+    value: cache_capnp::payload::Reader<capnp::any_pointer::Owned>,
 ) {
     let mut cache = cache.write().unwrap();
     use std::io::BufRead;
@@ -77,7 +77,7 @@ pub fn set_value(
     let mut builder = capnp::message::Builder::new_default();
     {
         let mut message =
-            builder.init_root::<cache_capnp::envelope::Builder<capnp::any_pointer::Owned>>();
+            builder.init_root::<cache_capnp::payload::Builder<capnp::any_pointer::Owned>>();
         message.set_data(data);
     }
 
@@ -87,7 +87,7 @@ pub fn set_value(
 
 pub fn read_message(
     cache: Cache,
-    reader: cache_capnp::message::Reader<capnp::any_pointer::Owned>,
+    reader: cache_capnp::request::Reader<capnp::any_pointer::Owned>,
 ) -> Vec<u8> {
     match reader.get_op() {
         Ok(op) => {
@@ -98,7 +98,7 @@ pub fn read_message(
                 }
                 cache_capnp::Op::Set => {
                     println!("SET!");
-                    let value = reader.get_value().expect("a value");
+                    let value = reader.get_payload().expect("a value");
                     let key = reader.get_key().expect("A key");
                     set_value(cache, key, value);
                     vec![]
@@ -115,7 +115,7 @@ pub fn read_message(
 
 pub fn wrap_result(
     data: Vec<u8>,
-    mut builder: cache_capnp::message::Builder<capnp::any_pointer::Owned>,
+    mut builder: cache_capnp::request::Builder<capnp::any_pointer::Owned>,
 ) {
     use std::io::BufRead;
     if !data.is_empty() {
@@ -123,6 +123,6 @@ pub fn wrap_result(
             &mut data.as_ref(),
             capnp::message::ReaderOptions::default(),
         );
-        builder.set_value(msg.unwrap().get_root().unwrap());
+        builder.set_payload(msg.unwrap().get_root().unwrap());
     }
 }

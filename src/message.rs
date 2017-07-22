@@ -25,7 +25,7 @@ pub trait FromProto<'a> {
 pub struct Request<'a, T: 'a + IntoProto + FromProto<'a> + HasTypeId> {
     key: Vec<u8>,
     op: Op,
-    envelope: Option<Envelope<'a, T>>,
+    payload: Option<Payload<'a, T>>,
     _p: PhantomData<&'a T>
 }
 
@@ -34,14 +34,14 @@ impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> IntoProto for Request<'a, T> 
         let mut builder = capnp::message::Builder::new_default();
         {
             let mut message =
-                builder.init_root::<cache_capnp::message::Builder<AnyProto>>();
+                builder.init_root::<cache_capnp::request::Builder<AnyProto>>();
             message.set_op(self.op.into());
             message.set_key(self.key.as_ref());
 
-            self.envelope.map(|envelope| message.set_value(
-                envelope
+            self.payload.map(|payload| message.set_payload(
+                payload
                     .into_proto().unwrap()
-                    .get_root::<cache_capnp::envelope::Builder<AnyProto>>()?
+                    .get_root::<cache_capnp::payload::Builder<AnyProto>>()?
                     .as_reader()
             ));
         }
@@ -50,17 +50,17 @@ impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> IntoProto for Request<'a, T> 
 }
 
 impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> FromProto<'a> for Request<'a, T> {
-    type Reader = cache_capnp::message::Reader<'a, AnyProto>;
+    type Reader = cache_capnp::request::Reader<'a, AnyProto>;
 
     fn from_proto(m: Self::Reader) -> Result<Box<Self>, error::Error> {
-        let env = if m.has_value() {
-            Some(*Envelope::from_proto(m.get_value()?)?)
+        let env = if m.has_payload() {
+            Some(*Payload::from_proto(m.get_payload()?)?)
         } else {
             None
         };
         let key = m.get_key()?;
         println!("{:?}", key);
-        Ok(Box::new(Self{op: Op::Set, key: key.into(), envelope: env, _p: PhantomData}))
+        Ok(Box::new(Self{op: Op::Set, key: key.into(), payload: env, _p: PhantomData}))
     }
 }
 
@@ -114,28 +114,28 @@ impl From<Op> for cache_capnp::Op {
     }
 }
 
-/// Envelope
+/// Payload
 #[derive(Debug, Clone)]
-pub struct Envelope<'a, T: 'a + IntoProto + FromProto<'a> + HasTypeId> {
+pub struct Payload<'a, T: 'a + IntoProto + FromProto<'a> + HasTypeId> {
     type_id: Type,
     data: T,
     _p: PhantomData<&'a T>
 }
 
-impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> IntoProto for Envelope<'a, T> {
+impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> IntoProto for Payload<'a, T> {
     fn into_proto(self) -> Result<AnyBuilder, error::Error> {
         let mut builder = capnp::message::Builder::new_default();
         {
             let mut message =
-                builder.init_root::<cache_capnp::envelope::Builder<AnyProto>>();
+                builder.init_root::<cache_capnp::payload::Builder<AnyProto>>();
             message.set_type(self.type_id.into());
         }
         Ok(builder)
     }
 }
 
-impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> FromProto<'a> for Envelope<'a, T> {
-    type Reader = cache_capnp::envelope::Reader<'a, AnyProto>;
+impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> FromProto<'a> for Payload<'a, T> {
+    type Reader = cache_capnp::payload::Reader<'a, AnyProto>;
 
     fn from_proto(message: Self::Reader) -> Result<Box<Self>, error::Error> {
         let tpe = message.get_type()?;
@@ -186,7 +186,7 @@ impl Foo {
 mod tests {
     use super::*;
 
-    fn build_message(mut m: cache_capnp::message::Builder<cache_capnp::foo::Owned>) {
+    fn build_message(mut m: cache_capnp::request::Builder<cache_capnp::foo::Owned>) {
         m.set_op(cache_capnp::Op::Set);
         m.set_key("foo".as_bytes());
         {
@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn test_foo() {
         let foo = Foo::new("bar".into());
-        let env = Envelope {
+        let env = Payload {
             type_id: foo.type_id(),
             data: foo,
             _p: PhantomData
@@ -210,7 +210,7 @@ mod tests {
         let msg = Request {
             op: Op::Set,
             key: "bar".into(),
-            envelope: Some(env),
+            payload: Some(env),
             _p: PhantomData,
         };
         msg.into_proto();
@@ -218,7 +218,7 @@ mod tests {
         let mut builder = capnp::message::Builder::new_default();
         build_message(builder.init_root());
 
-        let mut root = builder.get_root::<cache_capnp::message::Builder<AnyProto>>().unwrap();
+        let mut root = builder.get_root::<cache_capnp::request::Builder<AnyProto>>().unwrap();
         let msg: Request<Foo> = *Request::from_proto(root.as_reader()).unwrap();
         assert_eq!(msg.key, "foo".as_bytes())
     }

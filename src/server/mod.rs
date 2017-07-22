@@ -12,6 +12,9 @@ use build_messages;
 use new_cache;
 use read_message;
 
+use std::rc::Rc;
+use std::cell::Cell;
+
 pub fn server() {
     // Create the event loop that will drive this server
     let mut core = Core::new().unwrap();
@@ -23,6 +26,8 @@ pub fn server() {
     let mut cache = new_cache();
 
 
+    let messages_read = Rc::new(Cell::new(0u32));
+    let messages_read1 = messages_read.clone();
     // Iterate incoming connections
     let server = tcp.incoming().for_each(move |(tcp, _)| {
         // Split up the read and write halves
@@ -31,7 +36,7 @@ pub fn server() {
         let c2 = cache.clone();
         let responses = reader.and_then(move |m| {
             let message =
-                m.get_root::<cache_capnp::message::Reader<capnp::any_pointer::Owned>>()
+                m.get_root::<cache_capnp::request::Reader<capnp::any_pointer::Owned>>()
                     .unwrap();
             let resp = read_message(c2.clone(), message);
             let mut m = capnp::message::Builder::new_default();

@@ -3,6 +3,10 @@
 enum Type {
     foo @0;
 }
+enum Code {
+    success @0;
+    failure @1;
+}
 
 enum Op {
     get @0;
@@ -10,17 +14,19 @@ enum Op {
     del @2;
 }
 
-struct Message(Value) {
+struct Request(Value) {
     op @0 :Op;
     key @1 :Data;
-    value @2 :Envelope(Value);
+    payload @2 :Payload(Value);
 }
 
-struct Messages {
-    messages @0 :List(Message);
+struct Response(Value) {
+    requestId @0 :Text;
+    code       @1 :Code;
+    payload    @2 :Payload(Value);
 }
 
-struct Envelope(Value){
+struct Payload(Value){
     type @0 :Type;
     data @1 :Value;
 }

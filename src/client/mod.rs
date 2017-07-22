@@ -1,17 +1,13 @@
-use futures::{Future, Stream};
-use tokio_io::{AsyncWrite, AsyncRead};
-use tokio_core::net::{TcpListener, TcpStream};
+use futures;
+use futures::Future;
+use tokio_io::AsyncRead;
+use tokio_core::net::TcpStream;
 use tokio_core::reactor::Core;
-use std::env;
-use capnp_futures::serialize::*;
-use futures::Sink;
 use cache_capnp;
 use capnp;
 use error;
 use capnp_futures;
 use build_messages;
-use new_cache;
-use read_message;
 
 pub fn client() {
     let mut core = Core::new().unwrap();
@@ -38,16 +34,16 @@ pub fn client() {
 
         build_messages(m.init_root(), cache_capnp::Op::Set, "foo", buf);
 
-        let mut m2 = capnp::message::Builder::new_default();
-        build_messages(
-            m2.init_root(),
-            cache_capnp::Op::Get,
-            "foo",
-            vec![],
-        );
-        use std::io;
-        sender.send(m).and_then(move|_| sender.send(m2)).map_err(|e| error::decoding("fuck").into())
+        sender.send(m);
+        let mut futs = vec![];
+        for _ in 0..100 {
+            let mut m2 = capnp::message::Builder::new_default();
+            build_messages(m2.init_root(), cache_capnp::Op::Get, "foo", vec![]);
+            futs.push(sender.send(m2));
+        }
+        let futs = futures::future::join_all(futs);
 
+        futs.join(write_queue).map_err(|e| error::decoding(e.description.as_ref()).into())
     });
 
     core.run(request).unwrap();
