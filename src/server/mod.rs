@@ -41,21 +41,21 @@ pub fn server() {
         let read_stream = capnp_futures::ReadStream::new(r, Default::default());
 
         let cache = cache.clone();
-        let handle2 = handle.clone();
+
         let messages_read = messages_read.clone();
+
         let server = read_stream
             .for_each(move |m| {
 
                 let resp = handler(cache.clone(), m.get_root().unwrap());
                 messages_read.set(messages_read.get() + 1);
-
-                println!("{}", messages_read.get());
-                handle2.spawn(sender.send(resp).then(|_| {println!("message sent"); Ok(())}));
-                Ok(())
+                sender.send(resp).then(|_| {
+                    Ok(())
+                })
             })
             .map_err(|_| ());
 
-        handle.spawn(server.and_then(|_| write_queue.map_err(|_| ())).map(|_| ()));
+        handle.spawn(server).join(write_queue.map_err(|_| ())).map(|_| ()));
         Ok(())
     });
 

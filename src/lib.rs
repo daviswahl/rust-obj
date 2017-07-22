@@ -56,7 +56,7 @@ pub fn print_message(reader: capnp::message::Reader<capnp_futures::serialize::Ow
         cache_capnp::Type::Foo => println!("is foo"),
     }
 
-    println!("OP: {:?} KEY: {:?} {:?}", op as u16, key, foo);
+    println!("foo: {:?}", foo);
 }
 
 pub fn read_value(cache: Cache, key: &[u8]) -> Option<Vec<u8>> {
