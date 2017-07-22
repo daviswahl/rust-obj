@@ -242,10 +242,9 @@ mod tests {
         m.set_op(cache_capnp::Op::Set);
         m.set_key("foo".as_bytes());
         {
-            let mut value = m.init_value();
-            value.set_type(cache_capnp::Type::Foo);
+            let mut payload = m.init_payload();
             {
-                let mut data = value.init_data();
+                let mut data = payload.init_data();
                 data.set_name("bar")
             }
         }

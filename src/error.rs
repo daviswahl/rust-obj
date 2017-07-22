@@ -56,9 +56,16 @@ impl From<io::Error> for Error {
     }
 }
 
+use std::net;
+impl From<net::AddrParseError> for Error {
+    fn from(err: net::AddrParseError) -> Self {
+        Error { kind: ErrorKind::IO, description: err.description().to_owned()}
+    }
+}
 impl Into<io::Error> for Error {
     fn into(self) -> io::Error {
         io::Error::new(io::ErrorKind::Other, self)
     }
 }
+
 

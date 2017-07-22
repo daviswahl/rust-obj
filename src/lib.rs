@@ -1,4 +1,7 @@
 #![feature(conservative_impl_trait)]
+#![feature(option_entry)]
+#![feature(plugin)]
+#![plugin(clippy)]
 
 extern crate capnp;
 extern crate capnp_futures;

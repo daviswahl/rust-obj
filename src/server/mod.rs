@@ -56,8 +56,8 @@ pub fn server() {
             })
             .map_err(|_| ());
 
+        let server = server.join(write_queue.map_err(|_| ())).map(|_| ());
         handle.spawn(server);
-        handle.spawn(write_queue.map(|_| ()).map_err(|_| ()));
         Ok(())
     });
 
