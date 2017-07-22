@@ -1,3 +1,4 @@
+use futures;
 use futures::{Future, Stream};
 use tokio_io::{AsyncWrite, AsyncRead};
 use tokio_core::net::{TcpListener, TcpStream};
@@ -55,7 +56,8 @@ pub fn server() {
             })
             .map_err(|_| ());
 
-        handle.spawn(server).join(write_queue.map_err(|_| ())).map(|_| ()));
+        handle.spawn(server);
+        handle.spawn(write_queue.map(|_| ()).map_err(|_| ()));
         Ok(())
     });
 

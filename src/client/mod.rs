@@ -24,7 +24,6 @@ pub fn client() {
         let read_stream = capnp_futures::ReadStream::new(r, Default::default());
 
         let mut futs = vec![];
-
         for _ in 0..100 {
             let m = message::RequestBuilder::new()
                 .set_key("foo")
