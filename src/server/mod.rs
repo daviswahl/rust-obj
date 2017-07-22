@@ -11,6 +11,7 @@ use capnp_futures;
 use build_messages;
 use new_cache;
 use read_message;
+use Cache;
 
 use std::rc::Rc;
 use std::cell::Cell;
@@ -28,30 +29,46 @@ pub fn server() {
 
     let messages_read = Rc::new(Cell::new(0u32));
     let messages_read1 = messages_read.clone();
+
+    let messages_sent = Rc::new(Cell::new(0u32));
+    let messages_sent1 = messages_sent.clone();
+
     // Iterate incoming connections
-    let server = tcp.incoming().for_each(move |(tcp, _)| {
+    let server = tcp.incoming().for_each(move |(socket, _)| {
         // Split up the read and write halves
-        let (writer, reader) = capnp_futures::serialize::Transport::new(tcp, Default::default())
-            .split();
-        let c2 = cache.clone();
-        let responses = reader.and_then(move |m| {
-            let message =
-                m.get_root::<cache_capnp::request::Reader<capnp::any_pointer::Owned>>()
-                    .unwrap();
-            let resp = read_message(c2.clone(), message);
-            let mut m = capnp::message::Builder::new_default();
+        let (r, w) = socket.split();
+        let (mut sender, write_queue) = capnp_futures::write_queue(w);
+        let read_stream = capnp_futures::ReadStream::new(r, Default::default());
 
-            build_messages(m.init_root(), cache_capnp::Op::Set, "foo", resp);
+        let cache = cache.clone();
+        let handle2 = handle.clone();
+        let messages_read = messages_read.clone();
+        let server = read_stream
+            .for_each(move |m| {
 
-            Ok(m)
-        });
-        use futures::Sink;
-        let server = writer.send_all(responses).then(|_| Ok(()));
-        handle.spawn(server);
+                let resp = handler(cache.clone(), m.get_root().unwrap());
+                messages_read.set(messages_read.get() + 1);
 
+                println!("{}", messages_read.get());
+                handle2.spawn(sender.send(resp).then(|_| {println!("message sent"); Ok(())}));
+                Ok(())
+            })
+            .map_err(|_| ());
+
+        handle.spawn(server.and_then(|_| write_queue.map_err(|_| ())).map(|_| ()));
         Ok(())
     });
 
     // Spin up the server on the event loop
     core.run(server).unwrap();
+}
+
+fn handler(
+    cache: Cache,
+    m: cache_capnp::request::Reader<capnp::any_pointer::Owned>,
+) -> capnp::message::Builder<capnp::message::HeapAllocator> {
+    let resp = read_message(cache, m);
+    let mut m = capnp::message::Builder::new_default();
+    build_messages(m.init_root(), cache_capnp::Op::Set, "foo", resp);
+    m
 }

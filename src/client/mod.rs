@@ -1,6 +1,7 @@
 use futures;
-use futures::Future;
+use futures::{Future, Stream};
 use tokio_io::AsyncRead;
+use message;
 use tokio_core::net::TcpStream;
 use tokio_core::reactor::Core;
 use cache_capnp;
@@ -8,6 +9,7 @@ use capnp;
 use error;
 use capnp_futures;
 use build_messages;
+use message::{FromProto, IntoProto};
 
 pub fn client() {
     let mut core = Core::new().unwrap();
@@ -21,29 +23,29 @@ pub fn client() {
         let (mut sender, write_queue) = capnp_futures::write_queue(w);
         let read_stream = capnp_futures::ReadStream::new(r, Default::default());
 
-        let mut m = capnp::message::Builder::new_default();
-
-        let mut m_data = capnp::message::Builder::new_default();
-        {
-            let mut foo = m_data.init_root::<cache_capnp::foo::Builder>();
-            foo.set_name("bar");
-        }
-
-        let mut buf = vec![];
-        capnp::serialize_packed::write_message(&mut buf, &m_data).unwrap();
-
-        build_messages(m.init_root(), cache_capnp::Op::Set, "foo", buf);
-
-        sender.send(m);
         let mut futs = vec![];
+
         for _ in 0..100 {
-            let mut m2 = capnp::message::Builder::new_default();
-            build_messages(m2.init_root(), cache_capnp::Op::Get, "foo", vec![]);
-            futs.push(sender.send(m2));
+            let m = message::RequestBuilder::new()
+                .set_key("foo")
+                .set_op(message::Op::Set)
+                .set_payload(message::Foo { name: format!("bar") })
+                .finish()
+                .unwrap();
+            futs.push(sender.send(m.into_proto().unwrap()));
         }
+
         let futs = futures::future::join_all(futs);
 
-        futs.join(write_queue).map_err(|e| error::decoding(e.description.as_ref()).into())
+        let requests = futs.join(write_queue);
+
+        requests.and_then(|_| {
+            read_stream.for_each(|m| {
+                let msg: message::Request<message::Foo> = *message::Request::from_proto(m.get_root().unwrap()).unwrap();
+                println!("{:?}", msg);
+                futures::future::ok(())
+            }).map_err(|_| capnp::Error::failed("fuck".into()))
+        }).map_err(|_| error::decoding("fuck").into())
     });
 
     core.run(request).unwrap();

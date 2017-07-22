@@ -64,6 +64,60 @@ impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> FromProto<'a> for Request<'a,
     }
 }
 
+/// Request Builder
+pub struct RequestBuilder {
+    op: Option<Op>,
+    key: Option<Vec<u8>>,
+}
+
+impl RequestBuilder {
+    pub fn new() -> Self {
+        RequestBuilder{
+            op: None,
+            key: None,
+        }
+    }
+
+    pub fn set_op(mut self, op: Op) -> Self {
+        self.op = Some(op);
+        self
+    }
+
+    pub fn set_key(mut self, key: &str) -> Self {
+        self.key = Some(key.into());
+        self
+    }
+
+    pub fn set_payload<'a, T>(self, payload: T) -> TypedRequestBuilder<'a, T>
+        where T: 'a + IntoProto + FromProto<'a> + HasTypeId {
+        TypedRequestBuilder{
+            op: self.op,
+            key: self.key,
+            payload: payload,
+            _p: PhantomData
+        }
+    }
+}
+
+/// Typed Request Builder
+pub struct TypedRequestBuilder<'a, T: 'a + IntoProto + FromProto<'a> + HasTypeId> {
+    op: Option<Op>,
+    key: Option<Vec<u8>>,
+    payload: T,
+    _p: PhantomData<&'a T>
+}
+
+impl <'a, T> TypedRequestBuilder<'a, T> where T: 'a + IntoProto + FromProto<'a> + HasTypeId {
+   pub fn finish(self) -> Result<Request<'a, T>, &'static str> {
+       let op = self.op.ok_or("No op specified")?;
+       let key = self.key.ok_or("No key specified")?;
+
+       let payload = Payload{data: self.payload, _p: PhantomData};
+
+
+       Ok(Request{op: op, key: key, payload: Some(payload), _p: PhantomData})
+   }
+}
 /// Type
 #[derive(Debug, Copy, Clone)]
 pub enum Type {
@@ -117,7 +171,6 @@ impl From<Op> for cache_capnp::Op {
 /// Payload
 #[derive(Debug, Clone)]
 pub struct Payload<'a, T: 'a + IntoProto + FromProto<'a> + HasTypeId> {
-    type_id: Type,
     data: T,
     _p: PhantomData<&'a T>
 }
@@ -128,7 +181,6 @@ impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> IntoProto for Payload<'a, T> 
         {
             let mut message =
                 builder.init_root::<cache_capnp::payload::Builder<AnyProto>>();
-            message.set_type(self.type_id.into());
         }
         Ok(builder)
     }
@@ -147,7 +199,7 @@ impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> FromProto<'a> for Payload<'a,
 /// Foo
 #[derive(Debug, Clone)]
 pub struct Foo {
-    name: String,
+    pub name: String,
 }
 
 impl IntoProto for Foo {
@@ -203,7 +255,6 @@ mod tests {
     fn test_foo() {
         let foo = Foo::new("bar".into());
         let env = Payload {
-            type_id: foo.type_id(),
             data: foo,
             _p: PhantomData
         };
