@@ -61,10 +61,12 @@ impl Decoder for CacheCodec {
     type Error = io::Error;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<(RequestId, Message)>, io::Error> {
+        println!("decoding");
         let header_size = 8 + 1 + 4 + 8 + 4;
 
         // Check that the header is complete
         if buf.len() < header_size {
+            println!("header not ready");
             return Ok(None);
         }
 
@@ -72,8 +74,9 @@ impl Decoder for CacheCodec {
         let key_len = io::Cursor::new(&buf.as_ref()[21..25]).get_u32::<BigEndian>() as usize;
 
         let message_len = header_size + payload_len + key_len;
-        if (buf.len()) != message_len {
+        if (buf.len()) < message_len {
             // buffer not ready
+            println!("buffer not ready");
             return Ok(None);
         }
 
@@ -103,7 +106,6 @@ impl Encoder for CacheCodec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: (RequestId, Message), buf: &mut BytesMut) -> io::Result<()> {
-
         let (request_id, msg) = msg;
         let min_size = 8 + 1 + 4 + 8 + 4 + msg.key.len() + msg.payload.data.len();
         buf.reserve(min_size);
@@ -114,7 +116,6 @@ impl Encoder for CacheCodec {
         buf.put_u32::<BigEndian>(msg.key.len() as u32);
         buf.put_slice(msg.key.as_ref());
         buf.put_slice(msg.payload.data.as_ref());
-
         Ok(())
     }
 }

@@ -31,6 +31,27 @@ where
     TcpServer::new(codec::CacheProto, addr).serve(new_service)
 }
 
+pub struct LogService<T> {
+    pub inner: T
+}
+
+impl<T> Service for LogService<T> where T: Service<Request = codec::Message, Response = codec::Message, Error = io::Error>, T::Future: 'static {
+    type Request = codec::Message;
+    type Response = codec::Message;
+    type Error = io::Error;
+    type Future = Box<Future<Item = codec::Message, Error = io::Error>>;
+
+    fn call(&self, req: Self::Request) -> Self::Future {
+        println!("Got Request! Op: {:?}, Key: {:?}", req.op, String::from_utf8(req.key.clone()).unwrap());
+        Box::new(self.inner.call(req).and_then(|resp| {
+            {
+                println!("Got Response! Payload: {:?}", String::from_utf8(resp.payload.data.clone()).unwrap());
+            }
+            Ok(resp)
+        }))
+    }
+}
+
 pub struct CacheService;
 
 impl Service for CacheService
@@ -41,8 +62,23 @@ impl Service for CacheService
     type Future = Box<Future<Item = codec::Message, Error = io::Error>>;
 
     fn call(&self, req: Self::Request) -> Self::Future {
-        println!("Request: {:?}", req);
-        Box::new(self.call(req))
+        Box::new(future::ok(req))
+    }
+}
+
+impl<T> NewService for LogService<T>
+where T: NewService<Request = codec::Message, Response = codec::Message, Error = io::Error>,
+      <T::Instance as Service>::Future: 'static
+{
+
+    type Request = codec::Message;
+    type Response = codec::Message;
+    type Error = io::Error;
+    type Instance = LogService<T::Instance>;
+
+    fn new_service(&self) -> io::Result<Self::Instance> {
+        let inner = self.inner.new_service()?;
+        Ok(LogService { inner: inner })
     }
 }
 

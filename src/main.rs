@@ -3,12 +3,14 @@ extern crate test;
 extern crate objcache;
 extern crate tokio_service;
 extern crate tokio_core;
+extern crate futures;
 use std::env;
 use objcache::client;
 use objcache::server::server;
 use objcache::service;
 use objcache::codec::{Message, Payload, Op};
 use std::thread;
+use futures::Future;
 use tokio_core::reactor::Core;
 use tokio_service::{NewService, Service};
 
@@ -16,7 +18,7 @@ use tokio_service::{NewService, Service};
 fn main() {
     for arg in env::args().skip(1) {
         match arg.as_str() {
-            "server" => service::serve("127.0.0.1:12345".parse().unwrap(), service::CacheService),
+            "server" => service::serve("127.0.0.1:12345".parse().unwrap(), service::LogService{inner: service::CacheService}),
             "client" => do_client(),
             _ => (),
         }
@@ -36,9 +38,13 @@ fn do_client() {
                     }
                 };
 
-                core.run(client.and_then(|client|
-                    client.call(message)
-                ));
+
+                core.run(client.and_then(|client| {
+                    let futs = (0..1000).map(move |_| {
+                        client.call(message.clone())
+                    });
+                    futures::future::join_all(futs)
+                })).unwrap();
 }
 #[cfg(test)]
 mod tests {
