@@ -1,44 +1,50 @@
 #![feature(test)]
 extern crate test;
 extern crate objcache;
-
+extern crate tokio_service;
+extern crate tokio_core;
 use std::env;
-use objcache::client::client;
+use objcache::client;
 use objcache::server::server;
+use objcache::service;
+use objcache::codec::{Message, Payload, Op};
 use std::thread;
+use tokio_core::reactor::Core;
+use tokio_service::{NewService, Service};
 
 
 fn main() {
     for arg in env::args().skip(1) {
         match arg.as_str() {
-            "server" => server(),
-            "client" => {
-                loop {
-                    let mut threads = vec![];
-                    for _ in 0..100 {
-                        threads.push(thread::spawn(|| client()));
-                    }
-
-                    for child in threads {
-                        let _ = child.join();
-                    }
-                }
-            }
+            "server" => service::serve("127.0.0.1:12345".parse().unwrap(), service::CacheService),
+            "client" => do_client(),
             _ => (),
         }
     }
 }
 
-struct CapnProto;
+fn do_client() {
+             let mut core = Core::new().unwrap();
 
+                let client = client::Client::connect(&"127.0.0.1:12345".parse().unwrap(), &core.handle());
+                let message = Message {
+                    op: Op::Set,
+                    key: "1234".to_owned().into_bytes(),
+                    payload: Payload {
+                        type_id: 123,
+                        data: "1232350458019238".to_owned().into_bytes(),
+                    }
+                };
 
+                core.run(client.and_then(|client|
+                    client.call(message)
+                ));
+}
 #[cfg(test)]
 mod tests {
 
     use super::*;
     use test::Bencher;
     #[bench]
-    fn bench1(b: &mut Bencher) {
-        b.iter(|| client())
-    }
+    fn bench1(b: &mut Bencher) {}
 }

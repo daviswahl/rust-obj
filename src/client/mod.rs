@@ -1,66 +1,49 @@
+
 use futures;
-use futures::{Future, Stream};
-use tokio_io::{AsyncRead};
+use futures::{Future, BoxFuture, Stream, future};
+use tokio_io::AsyncRead;
 use tokio_io;
 use message;
 use tokio_core::net::TcpStream;
-use tokio_core::reactor::Core;
+use tokio_core::reactor::{Core, Handle};
+use tokio_proto::{TcpClient};
+use tokio_proto::multiplex::ClientService;
+use tokio_service::Service;
 use cache_capnp;
 use capnp;
 use error;
 use capnp_futures;
-use std::net;
+use std::net::{self, SocketAddr};
 use build_messages;
 use message::{FromProto, IntoProto};
-use std::collections::VecDeque;
-use std::sync::{Arc, RwLock};
+use std::rc::Rc;
+use std::sync::{Mutex, Arc};
 use std::io;
+use codec;
 
-type Message = capnp::message::Builder<capnp::message::HeapAllocator>;
-type WriteQueue = capnp_futures::WriteQueue<tokio_io::io::WriteHalf<TcpStream>, Message>;
-type ReadStream = capnp_futures::ReadStream<tokio_io::io::ReadHalf<TcpStream>>;
-type Sender = capnp_futures::Sender<Message>;
-
-/// Client
 pub struct Client {
-    core: Core,
-    addr: net::SocketAddr,
-    connection: Arc<RwLock<Option<Connection>>>,
-    queue: VecDeque<Message>
+    inner: ClientService<TcpStream, codec::CacheProto>
 }
 
 impl Client {
-    pub fn new(addr: &str) -> Result<Self, error::Error> {
-        let core = Core::new()?;
-        let addr = addr.parse()?;
-        Ok(Self{core: core, addr: addr, connection: Arc::new(RwLock::new(None)), queue: VecDeque::new()})
-    }
+    pub fn connect(addr: &SocketAddr, handle: &Handle) -> Box<Future<Item = Client, Error = io::Error> + 'static>{
+        let ret = TcpClient::new(codec::CacheProto).connect(addr, handle).map(|client_service|
+            Client { inner: client_service }
+        );
 
-    pub fn connect(&mut self) -> Result<(), io::Error> {
-        let mut lock = self.connection.clone();
-        let connect = TcpStream::connect(&self.addr, &self.core.handle()).and_then(move|socket| {
-            println!("getting lock");
-            let mut lock = lock.try_write().unwrap();
-            if lock.is_some() { return futures::future::ok(()) }
-
-            let (r, w) = socket.split();
-            let (mut sender, write_queue) = capnp_futures::write_queue(w);
-            let read_stream = capnp_futures::ReadStream::new(r, Default::default());
-            let connection = Connection{read_stream, write_queue, sender};
-            lock.get_or_insert(connection);
-            futures::future::ok(())
-        }).map(|_| ()).map_err(|_| ());
-
-        self.core.run(connect).unwrap();
-        Ok(())
+        Box::new(ret)
     }
 }
 
-/// Connection
-pub struct Connection {
-    write_queue: WriteQueue,
-    read_stream: ReadStream,
-    sender: Sender,
+impl Service for Client {
+    type Request = codec::Message;
+    type Response = codec::Message;
+    type Error = io::Error;
+    type Future = Box<Future<Item = codec::Message, Error = io::Error> + 'static>;
+
+    fn call(&self, req: codec::Message) -> Self::Future {
+        self.inner.call(req).boxed()
+    }
 }
 
 pub fn client() {
@@ -87,27 +70,21 @@ pub fn client() {
 
         let requests = futs.join(write_queue);
 
-        requests.and_then(|_| {
-            read_stream.for_each(|m| {
-                let msg: message::Request<message::Foo> = *message::Request::from_proto(m.get_root().unwrap()).unwrap();
-                println!("{:?}", msg);
-                futures::future::ok(())
-            }).map_err(|_| capnp::Error::failed("fuck".into()))
-        }).map_err(|_| error::decoding("fuck").into())
+        requests
+            .and_then(|_| {
+                read_stream
+                    .for_each(|m| {
+                        let msg: message::Request<message::Foo> =
+                            *message::Request::from_proto(&m.get_root().unwrap()).unwrap();
+                        println!("{:?}", msg);
+                        futures::future::ok(())
+                    })
+                    .map_err(|_| capnp::Error::failed("fuck".into()))
+            })
+            .map_err(|_| error::decoding("fuck").into())
     });
 
     core.run(request).unwrap();
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn test_client_1() {
-        let mut client = Client::new("127.0.0.1:12345").unwrap();
-        client.connect();
-        assert!(client.connection.read().unwrap().is_some())
-
-    }
-}

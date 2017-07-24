@@ -17,7 +17,7 @@ pub trait IntoProto {
 
 pub trait FromProto<'a> {
     type Reader;
-    fn from_proto(m: Self::Reader) -> Result<Box<Self>, error::Error>;
+    fn from_proto(m: &Self::Reader) -> Result<Box<Self>, error::Error>;
 }
 
 /// Request
@@ -52,15 +52,8 @@ impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> IntoProto for Request<'a, T> 
 impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> FromProto<'a> for Request<'a, T> {
     type Reader = cache_capnp::request::Reader<'a, AnyProto>;
 
-    fn from_proto(m: Self::Reader) -> Result<Box<Self>, error::Error> {
-        let env = if m.has_payload() {
-            Some(*Payload::from_proto(m.get_payload()?)?)
-        } else {
-            None
-        };
-        let key = m.get_key()?;
-        println!("{:?}", key);
-        Ok(Box::new(Self{op: Op::Set, key: key.into(), payload: env, _p: PhantomData}))
+    fn from_proto(m: &Self::Reader) -> Result<Box<Self>, error::Error> {
+        unimplemented!();
     }
 }
 
@@ -118,6 +111,97 @@ impl <'a, T> TypedRequestBuilder<'a, T> where T: 'a + IntoProto + FromProto<'a> 
        Ok(Request{op: op, key: key, payload: Some(payload), _p: PhantomData})
    }
 }
+
+/// Response
+#[derive(Debug, Clone)]
+pub struct Response<'a, T: 'a + IntoProto + FromProto<'a> + HasTypeId> {
+    request_id: String,
+    code: Code,
+    payload: Option<Payload<'a, T>>,
+    _p: PhantomData<&'a T>
+}
+
+impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> IntoProto for Response<'a, T> {
+    fn into_proto(self) -> Result<AnyBuilder, error::Error> {
+        let mut builder = capnp::message::Builder::new_default();
+        {
+            let mut message =
+                builder.init_root::<cache_capnp::response::Builder<AnyProto>>();
+            message.set_request_id(self.request_id.as_str());
+            message.set_code(self.code.into());
+
+            self.payload.map(|payload| message.set_payload(
+                payload
+                    .into_proto().unwrap()
+                    .get_root::<cache_capnp::payload::Builder<AnyProto>>()?
+                    .as_reader()
+            ));
+        }
+        Ok(builder)
+    }
+}
+
+impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> FromProto<'a> for Response<'a, T> {
+    type Reader = cache_capnp::response::Reader<'a, AnyProto>;
+
+    fn from_proto(m: &Self::Reader) -> Result<Box<Self>, error::Error> {
+        unimplemented!();
+    }
+}
+
+/// Request Builder
+pub struct ResponseBuilder {
+    code: Option<Code>,
+    request_id: Option<String>
+}
+
+impl ResponseBuilder {
+    pub fn new() -> Self {
+        ResponseBuilder{
+            code: None,
+            request_id: None,
+        }
+    }
+
+    pub fn set_code(mut self, code: Code) -> Self {
+        self.code = Some(code);
+        self
+    }
+
+    pub fn set_request_id(mut self, id: &str) -> Self {
+        self.request_id = Some(id.into());
+        self
+    }
+
+    pub fn set_payload<'a, T>(self, payload: T) -> TypedResponseBuilder<'a, T>
+        where T: 'a + IntoProto + FromProto<'a> + HasTypeId {
+        TypedResponseBuilder{
+            request_id: self.request_id,
+            code: self.code,
+            payload: payload,
+            _p: PhantomData
+        }
+    }
+}
+
+/// Typed Request Builder
+pub struct TypedResponseBuilder<'a, T: 'a + IntoProto + FromProto<'a> + HasTypeId> {
+    request_id: Option<String>,
+    code: Option<Code>,
+    payload: T,
+    _p: PhantomData<&'a T>
+}
+
+impl <'a, T> TypedResponseBuilder<'a, T> where T: 'a + IntoProto + FromProto<'a> + HasTypeId {
+   pub fn finish(self) -> Result<Response<'a, T>, &'static str> {
+       let request_id = self.request_id.ok_or("No request id specified")?;
+       let code = self.code.ok_or("No code specified")?;
+
+       let payload = Payload{data: self.payload, _p: PhantomData};
+       Ok(Response{code: code.into(), request_id: request_id.into(), payload: Some(payload), _p: PhantomData})
+   }
+}
+
 /// Type
 #[derive(Debug, Copy, Clone)]
 pub enum Type {
@@ -168,6 +252,31 @@ impl From<Op> for cache_capnp::Op {
     }
 }
 
+/// Code
+#[derive(Debug, Copy, Clone)]
+pub enum Code {
+    Success,
+    Failure,
+}
+
+impl From<cache_capnp::Code> for Code {
+    fn from(code: cache_capnp::Code) -> Self {
+        match code {
+            cache_capnp::Code::Success => Code::Success,
+            cache_capnp::Code::Failure => Code::Failure,
+        }
+    }
+}
+
+impl From<Code> for cache_capnp::Code {
+    fn from(code: Code) -> Self {
+        match code {
+            Code::Success => cache_capnp::Code::Success,
+            Code::Failure => cache_capnp::Code::Failure,
+        }
+    }
+}
+
 /// Payload
 #[derive(Debug, Clone)]
 pub struct Payload<'a, T: 'a + IntoProto + FromProto<'a> + HasTypeId> {
@@ -189,7 +298,7 @@ impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> IntoProto for Payload<'a, T> 
 impl<'a, T: IntoProto + FromProto<'a> + HasTypeId> FromProto<'a> for Payload<'a, T> {
     type Reader = cache_capnp::payload::Reader<'a, AnyProto>;
 
-    fn from_proto(message: Self::Reader) -> Result<Box<Self>, error::Error> {
+    fn from_proto(message: &Self::Reader) -> Result<Box<Self>, error::Error> {
         let tpe = message.get_type()?;
         let value = message.get_data()?;
         Err(error::decoding("error decoding"))
@@ -216,7 +325,7 @@ impl IntoProto for Foo {
 impl <'a>FromProto<'a> for Foo {
     type Reader = cache_capnp::foo::Reader<'a>;
 
-    fn from_proto(m: Self::Reader) -> Result<Box<Self>, error::Error> {
+    fn from_proto(m: &Self::Reader) -> Result<Box<Self>, error::Error> {
         let name = m.get_name()?;
         Ok(Box::new(Self { name: name.into() }))
     }
@@ -231,45 +340,5 @@ impl HasTypeId for Foo {
 impl Foo {
     fn new(name: String) -> Self {
         Self { name: name }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn build_message(mut m: cache_capnp::request::Builder<cache_capnp::foo::Owned>) {
-        m.set_op(cache_capnp::Op::Set);
-        m.set_key("foo".as_bytes());
-        {
-            let mut payload = m.init_payload();
-            {
-                let mut data = payload.init_data();
-                data.set_name("bar")
-            }
-        }
-    }
-
-    #[test]
-    fn test_foo() {
-        let foo = Foo::new("bar".into());
-        let env = Payload {
-            data: foo,
-            _p: PhantomData
-        };
-        let msg = Request {
-            op: Op::Set,
-            key: "bar".into(),
-            payload: Some(env),
-            _p: PhantomData,
-        };
-        msg.into_proto();
-
-        let mut builder = capnp::message::Builder::new_default();
-        build_message(builder.init_root());
-
-        let mut root = builder.get_root::<cache_capnp::request::Builder<AnyProto>>().unwrap();
-        let msg: Request<Foo> = *Request::from_proto(root.as_reader()).unwrap();
-        assert_eq!(msg.key, "foo".as_bytes())
     }
 }

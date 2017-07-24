@@ -9,12 +9,18 @@ extern crate futures;
 extern crate mio_uds;
 extern crate tokio_core;
 extern crate tokio_io;
+extern crate tokio_proto;
+extern crate tokio_service;
+extern crate deque;
+extern crate bytes;
+
 use std::collections::HashMap;
 use std::sync::RwLock;
 use std::sync::Arc;
 
 pub mod error;
 
+pub mod codec;
 pub mod client;
 pub mod server;
 pub mod cache_capnp {
@@ -22,6 +28,7 @@ pub mod cache_capnp {
 }
 
 pub mod message;
+pub mod service;
 
 pub type Cache = Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>;
 
@@ -54,7 +61,7 @@ pub fn print_message(reader: capnp::message::Reader<capnp_futures::serialize::Ow
     let tpe = env.get_type().unwrap();
     let data = env.get_data().unwrap();
     use message::FromProto;
-    let foo = message::Foo::from_proto(data.get_as().unwrap()).unwrap();
+    let foo = message::Foo::from_proto(&data.get_as().unwrap()).unwrap();
     match tpe {
         cache_capnp::Type::Foo => println!("is foo"),
     }
